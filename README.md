@@ -11,4 +11,4 @@ cp .env.example .env   # then add your ANTHROPIC_API_KEY
 uvicorn main:app --reload
 ```
 
-Backend: http://localhost:8000 — open `frontend/index.html` in a browser for the dashboard.
+Backend: https://self-healing-ai-nw9r.onrender.com/ — open `frontend/index.html` in a browser for the dashboard.
