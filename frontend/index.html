@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Self-Healing AI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen antialiased">
+  <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-10">
+    <div class="max-w-5xl mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="h-10 w-10 rounded-xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-emerald-400 text-xl">⟳</div>
+        <div>
+          <h1 class="text-lg sm:text-xl font-semibold tracking-tight">Self-Healing AI Automation</h1>
+          <p class="text-xs text-slate-400">Detect → Diagnose → Fix → Retry · <span class="font-mono">order-sync: storefront → CRM /v2/orders</span></p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-xs text-slate-400">
+        <span id="conn-dot" class="h-2 w-2 rounded-full bg-slate-500"></span>
+        <span id="conn-text">Connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 py-8 space-y-8">
+    <section class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="rounded-xl border border-slate-800 bg-slate-900 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Incidents</div>
+        <div id="stat-total" class="text-2xl font-semibold mt-1">0</div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-900 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Auto-healed</div>
+        <div id="stat-fixed" class="text-2xl font-semibold mt-1 text-emerald-400">0</div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-900 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Needs approval</div>
+        <div id="stat-approval" class="text-2xl font-semibold mt-1 text-orange-400">0</div>
+      </div>
+      <div class="rounded-xl border border-slate-800 bg-slate-900 p-4">
+        <div class="text-xs uppercase tracking-wide text-slate-400">Avg time to heal</div>
+        <div id="stat-time" class="text-2xl font-semibold mt-1">—</div>
+      </div>
+    </section>
+
+    <section class="rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-900/40 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <h2 class="font-semibold">Chaos control</h2>
+        <p class="text-sm text-slate-400 mt-1">Break the workflow with a random real-world failure: schema drift, API rate limit, or malformed data.</p>
+      </div>
+      <button id="inject-btn" class="shrink-0 rounded-xl bg-red-600 hover:bg-red-500 active:bg-red-700 disabled:opacity-60 disabled:cursor-wait px-6 py-3 font-semibold shadow-lg shadow-red-900/40 transition">
+        ⚡ Inject Random Failure
+      </button>
+    </section>
+
+    <section>
+      <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Incidents</h2>
+      <div id="incidents" class="space-y-4">
+        <div id="empty" class="rounded-xl border border-dashed border-slate-800 p-10 text-center text-slate-500">
+          No incidents yet. The workflow is healthy, so go break it.
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const API = location.protocol.startsWith("http") ? location.origin : "http://localhost:8000";
+
+    const STATUS = {
+      "broken":         { label: "Broken",         cls: "bg-red-500/15 text-red-300 border-red-500/40",             bar: "bg-red-500" },
+      "diagnosing":     { label: "Diagnosing…",    cls: "bg-yellow-500/15 text-yellow-300 border-yellow-500/40 animate-pulse", bar: "bg-yellow-400" },
+      "retrying":       { label: "Retrying…",      cls: "bg-yellow-500/15 text-yellow-300 border-yellow-500/40 animate-pulse", bar: "bg-yellow-400" },
+      "fixed":          { label: "Fixed",          cls: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40", bar: "bg-emerald-500" },
+      "needs-approval": { label: "Needs approval", cls: "bg-orange-500/15 text-orange-300 border-orange-500/40",   bar: "bg-orange-500" },
+    };
+    const FAULT_LABELS = { schema_drift: "Schema drift", rate_limit: "Rate limit (429)", malformed_data: "Malformed data" };
+    const FIX_LABELS = { rename_field: "Rename field", transform_data: "Transform data", retry_with_backoff: "Retry with backoff", manual_review: "Manual review" };
+
+    const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    const fmt = (v) => esc(JSON.stringify(v));
+
+    function changes(before, after) {
+      const rows = [];
+      for (const key of Object.keys(before)) {
+        if (!(key in after)) rows.push(`<span class="text-red-300 line-through">${esc(key)}: ${fmt(before[key])}</span>`);
+        else if (JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+          rows.push(`<span class="text-slate-400">${esc(key)}:</span> <span class="text-red-300 line-through">${fmt(before[key])}</span> → <span class="text-emerald-300">${fmt(after[key])}</span>`);
+      }
+      for (const key of Object.keys(after)) {
+        if (!(key in before)) rows.push(`<span class="text-emerald-300">+ ${esc(key)}: ${fmt(after[key])}</span>`);
+      }
+      return rows;
+    }
+
+    function card(inc) {
+      const s = STATUS[inc.status] || STATUS.broken;
+      const d = inc.diagnosis;
+      let body = "";
+      if (d) {
+        const diff = changes(inc.payload, d.fixed_payload);
+        const pct = Math.round(d.confidence * 100);
+        body = `
+          <div class="grid md:grid-cols-2 gap-4 mt-4">
+            <div>
+              <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Root cause</div>
+              <p class="text-sm text-slate-200 leading-relaxed">${esc(d.cause)}</p>
+            </div>
+            <div>
+              <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Fix applied</div>
+              <div class="flex items-center gap-2 text-sm">
+                <span class="rounded-md bg-slate-800 px-2 py-0.5 font-medium">${esc(FIX_LABELS[d.fix_type] || d.fix_type)}</span>
+                <span class="text-slate-400">confidence ${pct}%</span>
+              </div>
+              <div class="h-1.5 rounded-full bg-slate-800 mt-2 overflow-hidden"><div class="h-full ${pct >= 85 ? "bg-emerald-500" : "bg-orange-500"}" style="width:${pct}%"></div></div>
+              <div class="mt-3 rounded-lg bg-slate-950 border border-slate-800 p-3 font-mono text-xs space-y-1">
+                ${diff.length ? diff.map((r) => `<div>${r}</div>`).join("") : `<div class="text-slate-400">Payload unchanged, resent as-is</div>`}
+              </div>
+            </div>
+          </div>`;
+      } else if (inc.status === "diagnosing") {
+        body = `<p class="mt-4 text-sm text-yellow-300/80">Gemini is analyzing the payload and error…</p>`;
+      }
+      const approve = inc.status === "needs-approval" && d
+        ? `<button onclick="approve(${inc.id})" class="mt-4 rounded-lg bg-orange-600 hover:bg-orange-500 px-4 py-2 text-sm font-semibold">Approve fix &amp; retry</button>` : "";
+      const timeline = inc.timeline.map((t) => `<li><span class="text-slate-500 font-mono">${esc(t.time)}</span> ${esc(t.message)}</li>`).join("");
+
+      return `
+        <article class="relative overflow-hidden rounded-xl border border-slate-800 bg-slate-900 p-5">
+          <div class="absolute left-0 top-0 bottom-0 w-1 ${s.bar}"></div>
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="text-slate-500 font-mono text-sm">#${inc.id}</span>
+                <h3 class="font-semibold">${esc(FAULT_LABELS[inc.fault_type] || inc.fault_type)}</h3>
+                <span class="text-xs text-slate-500">· ${esc(inc.payload.order_id || "")} · ${esc(inc.created_at)} UTC</span>
+              </div>
+              <p class="mt-1 text-xs font-mono text-red-300/80 break-all">${esc(inc.error)}</p>
+            </div>
+            <div class="flex items-center gap-2">
+              ${inc.heal_seconds != null ? `<span class="text-xs text-slate-500">${inc.heal_seconds}s</span>` : ""}
+              <span class="rounded-full border px-3 py-1 text-xs font-semibold ${s.cls}">${s.label}</span>
+            </div>
+          </div>
+          ${body}
+          ${approve}
+          <details class="mt-4 text-xs text-slate-400">
+            <summary class="cursor-pointer select-none hover:text-slate-200">Timeline (${inc.timeline.length})</summary>
+            <ul class="mt-2 space-y-1">${timeline}</ul>
+          </details>
+        </article>`;
+    }
+
+    function setConnected(ok) {
+      document.getElementById("conn-dot").className = `h-2 w-2 rounded-full ${ok ? "bg-emerald-400" : "bg-red-500"}`;
+      document.getElementById("conn-text").textContent = ok ? "Monitoring live" : "Backend offline";
+    }
+
+    const openDetails = new Set();
+    async function refresh() {
+      try {
+        const res = await fetch(`${API}/incidents`);
+        const list = await res.json();
+        setConnected(true);
+
+        document.querySelectorAll("#incidents article details").forEach((el, i) => {
+          const id = el.closest("article").dataset.id;
+          el.open ? openDetails.add(id) : openDetails.delete(id);
+        });
+        const container = document.getElementById("incidents");
+        container.innerHTML = list.length ? list.map(card).join("") : container.innerHTML;
+        container.querySelectorAll("article").forEach((el, i) => {
+          el.dataset.id = list[i].id;
+          if (openDetails.has(String(list[i].id))) el.querySelector("details").open = true;
+        });
+
+        const fixed = list.filter((i) => i.status === "fixed");
+        const timed = list.filter((i) => i.heal_seconds != null);
+        document.getElementById("stat-total").textContent = list.length;
+        document.getElementById("stat-fixed").textContent = fixed.length;
+        document.getElementById("stat-approval").textContent = list.filter((i) => i.status === "needs-approval").length;
+        document.getElementById("stat-time").textContent = timed.length
+          ? `${(timed.reduce((a, i) => a + i.heal_seconds, 0) / timed.length).toFixed(1)}s` : "—";
+      } catch {
+        setConnected(false);
+      }
+    }
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.getElementById("inject-btn").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const { id } = await (await fetch(`${API}/inject-fault`, { method: "POST" })).json();
+        await refresh();
+        await sleep(1200); // let the red "broken" state register before the healer kicks in
+        await fetch(`${API}/incidents/${id}/heal`, { method: "POST" });
+        await refresh();
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    async function approve(id) {
+      await fetch(`${API}/incidents/${id}/approve`, { method: "POST" });
+      refresh();
+    }
+
+    refresh();
+    setInterval(refresh, 1500);
+  </script>
+</body>
+</html>
